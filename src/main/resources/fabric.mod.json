@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "lazify",
+  "version": "${version}",
+  "name": "Lazify",
+  "description": "BedWars player-stats HUD, ported to Fabric for Minecraft 26.2.",
+  "environment": "client",
+  "mixins": ["lazify.mixins.json"],
+  "entrypoints": {
+    "client": ["com.lazify.LazifyClient"]
+  },
+  "depends": {
+    "fabricloader": ">=0.19.5",
+    "fabric-api": "*",
+    "minecraft": "~26.2",
+    "java": ">=25"
+  }
+}

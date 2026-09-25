@@ -1,0 +1,12 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.lazify.mixin",
+  "client": [
+    "GameRendererMixin",
+    "AbstractContainerScreenMixin",
+    "MellowTabOverlayMixin",
+    "CameraFovMixin",
+    "MellowMouseHandlerMixin"
+  ]
+}
