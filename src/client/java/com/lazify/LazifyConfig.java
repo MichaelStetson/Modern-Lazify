@@ -32,6 +32,16 @@ final class LazifyConfig {
         settings.clear();
         settings.putAll(LegacySettingCatalog.defaults());
         if (!Files.exists(FILE)) {
+            Path legacyFile = LegacyConfigImporter.find(FILE.getParent());
+            if (legacyFile != null) {
+                try {
+                    int imported = LegacyConfigImporter.importFile(legacyFile, this);
+                    LOGGER.info("Imported {} settings from legacy configuration {}", imported, legacyFile.getFileName());
+                } catch (IOException e) {
+                    LOGGER.warn("Could not import legacy Lazify configuration {}", legacyFile.getFileName());
+                    return;
+                }
+            }
             save();
             return;
         }

@@ -30,3 +30,11 @@ Press **L** in-game or run `/ov`, `/overlay`, or `/lazify` to open settings. The
 The settings screen masks keys while editing. Settings are stored locally in the game’s `config/lazify.json`; keys are not bundled with the mod and must not be committed.
 
 Choose Lazify, Nerdify, or Mellow from the settings screen. `/ov help` lists the HUD, player, and configuration commands.
+
+## Legacy config import
+
+On first launch, Forge settings from `config/lazify/lazify.cfg` or `config/lazify.cfg` are imported into `config/lazify.json`. The old file is kept unchanged. Provider keys are migrated locally, and legacy LWJGL keybinds are converted to GLFW key codes. Existing appearance presets in `config/lazify/presets/*.properties` remain readable. If `config/lazify.json` already exists, it takes precedence; back it up and remove it before launch to import the old config.
+
+## Credits
+
+The original Forge mod was created by abusez. [Discord](https://discord.gg/abusez).
