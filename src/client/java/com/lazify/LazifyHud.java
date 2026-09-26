@@ -17,8 +17,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 public final class LazifyHud {
-    private static final int TEXT = 0xFFF1ECF7;
-    private static final int MUTED = 0xFFB8ACBF;
+    private static final int TEXT = 0xFFFFFFFF;
     private static final Column[] COLUMNS = {
             new Column("encounters", "colEncounters", "[E]", "enc", "encountersScale", "encountersColors"),
             new Column("username", "colUsername", "[PLAYER]", "ign", null, null),
@@ -57,6 +56,11 @@ public final class LazifyHud {
     private static LazifyConfig activeConfig;
     private static BedwarsMonitor activeMonitor;
     private static int mellowScroll;
+    private static PreviewBounds previewBounds;
+
+    static PreviewBounds previewBounds() {
+        return previewBounds;
+    }
 
     private final LazifyConfig config;
     private final BedwarsMonitor monitor;
@@ -179,10 +183,11 @@ public final class LazifyHud {
         Minecraft client = Minecraft.getInstance();
         int theme = config.getInt("overlayTheme");
         boolean mellow = theme == 2;
-        if (!mellow) mellowScroll = 0;
+        boolean nerdify = theme == 1;
         boolean positionPreview = client.gui.screen() instanceof LazifyPositionScreen;
+        if (positionPreview) previewBounds = null;
         if (!config.overlayEnabled() || (!positionPreview && !monitor.inBedwars())
-                || (!positionPreview && client.player == null)) {
+                || (!positionPreview && client.player == null) || (positionPreview && mellow)) {
             resetScrollWhenInactive();
             return;
         }
@@ -200,18 +205,27 @@ public final class LazifyHud {
         if (mellow && players.isEmpty()) return;
         int screenWidth = graphics.guiWidth();
         int screenHeight = graphics.guiHeight();
-        int rowHeight = mellow ? 12 : 12 + config.getInt("overlayRowGap");
-        int top = mellow ? 20 : Math.max(0, config.getInt("overlayY"));
+        int rowGap = Math.max(0, config.getInt("overlayRowGap"));
+        int rowHeight = mellow ? 12 : client.font.lineHeight + rowGap;
+        int top = mellow ? 20 : config.getInt("overlayY");
         int gap = mellow ? 4 : Math.max(0, config.getInt("overlayColGap"));
-        int padding = mellow ? 0 : Math.max(0, config.getInt("overlayPad")) + 5;
-        int[] widths = columnWidths(client, columns, players, players.size(), gap, mellow);
+        int inset = mellow ? 0 : overlayInset(nerdify);
+        int[] widths = columnWidths(client, columns, players, mellow);
         int contentWidth = totalWidth(widths, gap);
-        int panelWidth = padding * 2 + contentWidth;
-        int headerHeight = mellow ? 12 : 28;
+        int panelWidth = mellow ? contentWidth : contentWidth + inset * 2;
+        int fontHeight = client.font.lineHeight;
+        int headerHeight = mellow ? 12 : fontHeight;
+        int headerPadTop = nerdify ? Math.max(3, rowGap) : 0;
+        int headerSeparatorGap = nerdify ? Math.max(2, rowGap / 2) : 0;
+        int rowGapAfterSeparator = nerdify ? Math.max(3, rowGap) : 0;
+        int bottomPad = nerdify ? Math.max(4, rowGap) : 0;
+        int contentY = mellow ? headerHeight
+                : nerdify ? inset + headerPadTop + fontHeight + headerSeparatorGap + rowGapAfterSeparator
+                : inset + fontHeight + 5;
         if (screenWidth < 120 || screenHeight < 80 || panelWidth <= 0) return;
 
-        float scale;
         int rowLimit;
+        float scale;
         if (mellow) {
             int availableWidth = Math.max(100, screenWidth - 8);
             scale = panelWidth > availableWidth ? (float) availableWidth / panelWidth : 1.0f;
@@ -226,62 +240,81 @@ public final class LazifyHud {
         int rowCount = Math.min(players.size(), rowLimit);
         if (mellow) clampMellowScroll(mellowScrollMax(players.size(), rowCount));
         int firstRow = mellow ? mellowScroll : 0;
-        int contentY = padding + headerHeight + (mellow ? 0 : 3);
-        int panelHeight = padding * 2 + headerHeight + (mellow ? 0 : 3)
-                + Math.max(1, rowCount) * rowHeight + (!mellow && players.isEmpty() ? rowHeight : 0);
-        if (!mellow) {
-            scale = Math.min(scale, Math.min((screenWidth - 8.0f) / panelWidth,
-                    (screenHeight - 8.0f) / panelHeight));
+        int panelHeight;
+        if (mellow) {
+            panelHeight = headerHeight + rowCount * rowHeight;
+        } else if (nerdify) {
+            panelHeight = inset + headerPadTop + fontHeight + headerSeparatorGap
+                    + rowGapAfterSeparator + rowCount * rowHeight + bottomPad + inset;
+        } else {
+            panelHeight = inset + fontHeight + (rowCount > 0 ? 5 : 0) + rowCount * rowHeight + inset;
         }
-        if (scale <= 0.0f) return;
         int scaledWidth = Math.round(panelWidth * scale);
+        int x = mellow ? Math.max(4, (screenWidth - scaledWidth) / 2) : config.getInt("overlayX");
+        if (mellow && x + scaledWidth > screenWidth - 4) x = Math.max(4, screenWidth - 4 - scaledWidth);
+        int y = mellow ? top : config.getInt("overlayY");
         int scaledHeight = Math.round(panelHeight * scale);
-        int x = mellow ? Math.max(4, (screenWidth - scaledWidth) / 2)
-                : Math.max(2, Math.min(screenWidth - scaledWidth - 2, config.getInt("overlayX")));
-        int y = mellow ? top : Math.max(2, Math.min(screenHeight - scaledHeight - 2, config.getInt("overlayY")));
+        if (positionPreview) previewBounds = new PreviewBounds(x, y, scaledWidth, scaledHeight);
 
         int background = color(config.getInt("bgR"), config.getInt("bgG"), config.getInt("bgB"), config.getInt("bgOpacity"));
-        int headerBg = mellow
-                ? color(config.getInt("mellowHeaderR"), config.getInt("mellowHeaderG"), config.getInt("mellowHeaderB"), config.getInt("mellowHeaderA"))
-                : color(config.getInt("headerAllR"), config.getInt("headerAllG"), config.getInt("headerAllB"), 230);
-        int mellowBg = color(config.getInt("mellowOuterR"), config.getInt("mellowOuterG"), config.getInt("mellowOuterB"), config.getInt("mellowOuterA"));
-        int rowBg = color(config.getInt("mellowRowR"), config.getInt("mellowRowG"), config.getInt("mellowRowB"), config.getInt("mellowRowA"));
-        int taggedBg = color(config.getInt("mellowTaggedR"), config.getInt("mellowTaggedG"), config.getInt("mellowTaggedB"), config.getInt("mellowTaggedA"));
+        int headerBg = color(config.getInt("mellowHeaderR"), config.getInt("mellowHeaderG"),
+                config.getInt("mellowHeaderB"), config.getInt("mellowHeaderA"));
+        int mellowBg = color(config.getInt("mellowOuterR"), config.getInt("mellowOuterG"),
+                config.getInt("mellowOuterB"), config.getInt("mellowOuterA"));
+        int rowBg = color(config.getInt("mellowRowR"), config.getInt("mellowRowG"),
+                config.getInt("mellowRowB"), config.getInt("mellowRowA"));
+        int taggedBg = color(config.getInt("mellowTaggedR"), config.getInt("mellowTaggedG"),
+                config.getInt("mellowTaggedB"), config.getInt("mellowTaggedA"));
         Map<String, List<ColorStop>> scales = new HashMap<>();
         graphics.pose().pushMatrix();
         graphics.pose().translate(x, y);
         graphics.pose().scale(scale, scale);
         if (mellow) {
-            int inset = 4 + config.getInt("overlayPad");
-            graphics.fill(-inset, -inset, panelWidth + inset, panelHeight + inset, mellowBg);
+            int outerInset = 4 + config.getInt("overlayPad");
+            graphics.fill(-outerInset, -outerInset, panelWidth + outerInset,
+                    panelHeight + outerInset, mellowBg);
+            graphics.fill(0, 0, panelWidth, headerHeight, headerBg);
         } else {
-            graphics.fill(0, 0, panelWidth, panelHeight, background);
-            if (config.getBoolean("outlineEnabled")) graphics.outline(0, 0, panelWidth, panelHeight, outlineColor());
+            fillRounded(graphics, 0, 0, panelWidth, panelHeight,
+                    config.getInt("borderRadius"), background);
+            if (config.getBoolean("outlineEnabled")) {
+                drawRoundedOutline(graphics, panelWidth, panelHeight, config.getInt("borderRadius"),
+                        config.getDouble("outlineWidth"), outlineColor());
+            }
         }
-        graphics.fill(padding, padding, panelWidth - padding, padding + headerHeight, headerBg);
 
-        String title = theme == 1 ? "L A Z I F Y" : "Lazify";
-        if (!mellow) graphics.text(client.font, title, padding + 2, padding + 2, TEXT, config.getBoolean("textShadow"));
-        int headerY = mellow ? Math.max(0, (headerHeight - client.font.lineHeight) / 2) : padding + 15;
-        int cursorX = padding;
+        int headerY = mellow ? Math.max(0, (headerHeight - fontHeight) / 2)
+                : nerdify ? inset + headerPadTop : inset;
+        int cursorX = inset;
+        int cellPad = nerdify ? Math.max(3, gap / 2) : 0;
         for (int i = 0; i < columns.size(); i++) {
             Column column = columns.get(i);
-            String header = theme == 1 ? column.compactHeader : column.header;
-            if (mellow) {
-                if (header.startsWith("[") && header.endsWith("]") && header.length() > 2) {
-                    header = header.substring(1, header.length() - 1);
-                }
-                header = header.toUpperCase(Locale.ROOT);
-                if (config.getBoolean("headerBold")) header = "§l" + header + "§r";
+            String header = mellow || !nerdify ? column.header : column.compactHeader;
+            if (mellow && header.startsWith("[") && header.endsWith("]") && header.length() > 2) {
+                header = header.substring(1, header.length() - 1);
             }
-            int headerX = cursorX + 2 + (mellow && column.legacyKey.equals("username") ? 10 : 0);
-            if (mellow && !column.legacyKey.equals("username") && !column.legacyKey.equals("rank")) {
-                headerX = cursorX + widths[i] - 3 - client.font.width(header);
+            if (mellow) header = header.toUpperCase(Locale.ROOT);
+            if (config.getBoolean("headerBold") && !header.isEmpty()) header = "§l" + header;
+            int headerX;
+            if (mellow) {
+                headerX = column.legacyKey.equals("username") ? cursorX + 13
+                        : column.legacyKey.equals("rank") ? cursorX + 3
+                        : cursorX + widths[i] - 3 - client.font.width(header);
+            } else if (nerdify && nerdifyNumericColumn(column.legacyKey)) {
+                headerX = cursorX + (widths[i] - client.font.width(header)) / 2;
+            } else if (nerdify) {
+                headerX = cursorX + cellPad;
+            } else {
+                headerX = cursorX + (widths[i] - client.font.width(header)) / 2;
             }
             graphics.text(client.font, header, headerX, headerY, headerColor(column), config.getBoolean("textShadow"));
             cursorX += widths[i] + gap;
         }
 
+        if (nerdify && config.getBoolean("outlineEnabled")) {
+            int separatorY = inset + headerPadTop + fontHeight + headerSeparatorGap;
+            graphics.fill(inset, separatorY, panelWidth - inset, separatorY + 1, outlineColor());
+        }
         for (int rowIndex = 0; rowIndex < rowCount; rowIndex++) {
             BedwarsMonitor.PlayerRow row = players.get(firstRow + rowIndex);
             int rowY = contentY + rowIndex * rowHeight;
@@ -292,42 +325,55 @@ public final class LazifyHud {
             } else if (mellow) {
                 graphics.fill(0, rowY, panelWidth, rowBottom, row.tag().isBlank() ? rowBg : taggedBg);
             } else if (config.getBoolean("stripeEnabled") && (rowIndex & 1) == 1) {
-                int stripe = color(config.getInt("stripeR"), config.getInt("stripeG"), config.getInt("stripeB"), config.getInt("stripeA"));
+                int stripe = color(config.getInt("stripeR"), config.getInt("stripeG"),
+                        config.getInt("stripeB"), config.getInt("stripeA"));
                 graphics.fill(1, rowY, panelWidth - 1, rowBottom, stripe);
             }
 
-            cursorX = padding;
+            cursorX = inset;
             for (int i = 0; i < columns.size(); i++) {
                 Column column = columns.get(i);
                 int headSpace = mellow && column.legacyKey.equals("username") ? 10 : 0;
-                String text = fit(client, displayValue(column, row), widths[i] - 4 - headSpace);
+                String text = displayValue(column, row);
+                if (mellow) {
+                    text = fitMellow(client, text, widths[i] - 6 - headSpace);
+                } else if (column.legacyKey.equals("username")) {
+                    text = trimToWidth(client, text, widths[i]);
+                }
                 int textColor = valueColor(column, text, row, scales);
                 if (mellow && column.legacyKey.equals("username")
                         && unresolvedNick(row) && row.team().isBlank()) {
                     textColor = 0xFFFFFF55;
                 }
-                int textX = cursorX + 2;
-                if (headSpace > 0) {
-                    drawMellowHead(graphics, client, row.uuid(), textX, rowY + 2);
-                    textX += headSpace;
+                int textX;
+                if (mellow) {
+                    textX = cursorX + 3;
+                    if (headSpace > 0) {
+                        drawMellowHead(graphics, client, row.uuid(), textX, rowY + 2);
+                        textX += headSpace;
+                    }
+                    if (!column.legacyKey.equals("username") && !column.legacyKey.equals("rank")) {
+                        textX = cursorX + widths[i] - 3 - client.font.width(text);
+                    }
+                } else if (nerdify) {
+                    textX = nerdifyNumericColumn(column.legacyKey)
+                            ? cursorX + (widths[i] - client.font.width(text)) / 2 : cursorX + cellPad;
+                } else {
+                    textX = column.legacyKey.equals("username") || column.legacyKey.equals("rank")
+                            ? cursorX : cursorX + (widths[i] - client.font.width(text)) / 2;
                 }
-                if (mellow && !column.legacyKey.equals("username") && !column.legacyKey.equals("rank")) {
-                    textX = cursorX + widths[i] - 3 - client.font.width(text);
-                } else if (theme == 1 && !column.legacyKey.equals("username")) {
-                    textX += Math.max(0, (widths[i] - client.font.width(text)) / 2);
-                }
-                graphics.text(client.font, text, textX, rowY + 1, textColor, config.getBoolean("textShadow"));
+                int textY = mellow ? rowY + Math.max(0, (rowHeight - fontHeight) / 2) : rowY;
+                graphics.text(client.font, text, textX, textY, textColor, config.getBoolean("textShadow"));
                 cursorX += widths[i] + gap;
             }
         }
-        if (!mellow && players.isEmpty()) {
-            graphics.text(client.font, "Waiting for tab-list players", padding + 4, contentY + 1, MUTED, false);
-        }
         if (mellow && players.size() > rowCount) {
-            String indicator = firstRow > 0 && firstRow + rowCount < players.size() ? "▲▼"
-                    : firstRow > 0 ? "▲" : "▼";
-            graphics.text(client.font, indicator, panelWidth - client.font.width(indicator) - 4,
-                    contentY + rowCount * rowHeight - 8, TEXT, false);
+            int indicatorX = panelWidth - 8;
+            int bottomY = panelHeight - fontHeight - 1;
+            if (firstRow > 0) graphics.text(client.font, "▲", indicatorX, headerHeight, TEXT, false);
+            if (firstRow + rowCount < players.size()) {
+                graphics.text(client.font, "▼", indicatorX, bottomY, TEXT, false);
+            }
         }
         graphics.pose().popMatrix();
     }
@@ -347,32 +393,31 @@ public final class LazifyHud {
         return ordered.stream().filter(column -> config.getBoolean(column.settingKey)).toList();
     }
 
-    private int[] columnWidths(Minecraft client, List<Column> columns, List<BedwarsMonitor.PlayerRow> players,
-                               int rowCount, int gap, boolean mellow) {
+    private int[] columnWidths(Minecraft client, List<Column> columns,
+                               List<BedwarsMonitor.PlayerRow> players, boolean mellow) {
+        boolean nerdify = !mellow && config.getInt("overlayTheme") == 1;
         int[] widths = new int[columns.size()];
         for (int i = 0; i < columns.size(); i++) {
             Column column = columns.get(i);
-            String header = mellow || config.getInt("overlayTheme") == 0 ? column.header : column.compactHeader;
-            if (mellow) {
-                if (header.startsWith("[") && header.endsWith("]") && header.length() > 2) {
-                    header = header.substring(1, header.length() - 1);
-                }
-                header = header.toUpperCase(Locale.ROOT);
-                if (config.getBoolean("headerBold")) header = "§l" + header + "§r";
+            String header = mellow || !nerdify ? column.header : column.compactHeader;
+            if (mellow && header.startsWith("[") && header.endsWith("]") && header.length() > 2) {
+                header = header.substring(1, header.length() - 1).toUpperCase(Locale.ROOT);
+            }
+            if (config.getBoolean("headerBold") && !header.isEmpty()) {
+                header = "§l" + header + (mellow ? "§r" : "");
             }
             int headSpace = mellow && column.legacyKey.equals("username") ? 10 : 0;
-            int width = client.font.width(header) + 6 + headSpace;
-            for (int row = 0; row < rowCount; row++) {
-                width = Math.max(width, client.font.width(displayValue(column, players.get(row))) + 6 + headSpace);
+            int width = client.font.width(stripFormatting(header)) + (mellow && !header.isEmpty() ? 6 : 0);
+            for (BedwarsMonitor.PlayerRow row : players) {
+                String value = displayValue(column, row);
+                int valueWidth = client.font.width(stripFormatting(value));
+                if (mellow) valueWidth += 6 + headSpace;
+                width = Math.max(width, valueWidth);
             }
-            int max = mellow ? column.legacyKey.equals("username") ? 230 : column.legacyKey.equals("rank") ? 120 : 72
-                    : column.legacyKey.equals("username") ? 220 : column.legacyKey.equals("rank") ? 120 : 96;
-            int min = column.legacyKey.equals("username") ? 70
-                    : mellow && column.legacyKey.equals("star") ? 56
-                    : mellow && column.legacyKey.equals("fkdr") ? 40
-                    : mellow && column.legacyKey.equals("winstreaks") ? 42
-                    : column.legacyKey.equals("rank") ? 48 : 36;
-            widths[i] = Math.max(min, Math.min(max, width));
+            int minimum = mellow ? mellowMinColumnWidth(column.legacyKey)
+                    : nerdify ? nerdifyMinColumnWidth(column.legacyKey) : 0;
+            width = Math.max(width, minimum);
+            widths[i] = mellow ? Math.min(width, mellowMaxColumnWidth(column.legacyKey)) : width;
         }
         return widths;
     }
@@ -610,12 +655,104 @@ public final class LazifyHud {
         return false;
     }
 
-    private static String fit(Minecraft client, String value, int width) {
-        if (client.font.width(value) <= width) return value;
-        String ellipsis = "…";
+    private int overlayInset(boolean nerdify) {
+        int base = nerdify ? Math.max(4, config.getInt("overlayColGap") / 2) : 4;
+        return base + config.getInt("overlayPad");
+    }
+
+    private static boolean nerdifyNumericColumn(String key) {
+        return !key.equals("username") && !key.equals("rank") && !key.equals("encounters");
+    }
+
+    private static int nerdifyMinColumnWidth(String key) {
+        return switch (key) {
+            case "encounters" -> 20;
+            case "rank" -> 36;
+            case "star", "dailystars", "weeklystars", "monthlystars" -> key.equals("star") ? 30 : 34;
+            case "fkdr", "wlr", "bblr", "kdr" -> 34;
+            case "kills", "finals", "beds", "wins", "urchin" -> 36;
+            case "dailyfkdr", "weeklyfkdr", "monthlyfkdr", "dailywlr", "weeklywlr", "monthlywlr",
+                    "dailybblr", "weeklybblr", "monthlybblr", "dailykdr", "weeklykdr", "monthlykdr" -> 40;
+            case "winstreaks", "level" -> 24;
+            case "ping" -> 28;
+            case "session" -> 32;
+            default -> 0;
+        };
+    }
+
+    private static int mellowMinColumnWidth(String key) {
+        return switch (key) {
+            case "username" -> 70;
+            case "star" -> 56;
+            case "fkdr" -> 40;
+            case "winstreaks" -> 42;
+            case "rank" -> 48;
+            default -> 36;
+        };
+    }
+
+    private static int mellowMaxColumnWidth(String key) {
+        return switch (key) {
+            case "username" -> 230;
+            case "rank" -> 120;
+            case "star" -> 70;
+            default -> 72;
+        };
+    }
+
+    private static String trimToWidth(Minecraft client, String value, int width) {
+        if (width <= 0) return "";
         int end = value.length();
-        while (end > 0 && client.font.width(value.substring(0, end) + ellipsis) > width) end--;
-        return end == 0 ? "" : value.substring(0, end) + ellipsis;
+        while (end > 0 && client.font.width(value.substring(0, end)) > width) end--;
+        return value.substring(0, end);
+    }
+
+    private static String fitMellow(Minecraft client, String value, int width) {
+        if (width <= 0) return "";
+        if (client.font.width(value) <= width) return value;
+        String suffix = "...";
+        int suffixWidth = client.font.width(suffix);
+        int end = value.length();
+        while (end > 0 && client.font.width(value.substring(0, end)) > width - suffixWidth) end--;
+        return end == 0 ? "" : value.substring(0, end) + suffix;
+    }
+
+    private static void fillRounded(net.minecraft.client.gui.GuiGraphicsExtractor graphics,
+                                    int x, int y, int width, int height, int radius, int color) {
+        if (width <= 0 || height <= 0) return;
+        int r = Math.max(0, Math.min(radius, Math.min(width, height) / 2));
+        for (int row = 0; row < height; row++) {
+            int inset = roundedInset(r, row, height);
+            graphics.fill(x + inset, y + row, x + width - inset, y + row + 1, color);
+        }
+    }
+
+    private static void drawRoundedOutline(net.minecraft.client.gui.GuiGraphicsExtractor graphics,
+                                           int width, int height, int radius, double stroke, int color) {
+        int thickness = Math.max(1, (int) Math.ceil(stroke));
+        int r = Math.max(0, Math.min(radius, Math.min(width, height) / 2));
+        int innerHeight = height - thickness * 2;
+        int innerRadius = Math.max(0, r - thickness);
+        for (int row = 0; row < height; row++) {
+            int outerInset = roundedInset(r, row, height);
+            if (row < thickness || row >= height - thickness || innerHeight <= 0) {
+                graphics.fill(outerInset, row, width - outerInset, row + 1, color);
+                continue;
+            }
+            int innerInset = roundedInset(innerRadius, row - thickness, innerHeight);
+            int innerStart = thickness + innerInset;
+            graphics.fill(outerInset, row, innerStart, row + 1, color);
+            graphics.fill(width - innerStart, row, width - outerInset, row + 1, color);
+        }
+    }
+
+    private static int roundedInset(int radius, int row, int height) {
+        if (radius <= 0 || height <= 0) return 0;
+        int distance = row < radius ? radius - row - 1
+                : row >= height - radius ? row - (height - radius) : -1;
+        if (distance < 0) return 0;
+        double remaining = Math.max(0.0, (double) radius * radius - (double) distance * distance);
+        return radius - (int) Math.floor(Math.sqrt(remaining));
     }
     private static void drawMellowHead(net.minecraft.client.gui.GuiGraphicsExtractor graphics, Minecraft client,
                                        java.util.UUID uuid, int x, int y) {
@@ -630,4 +767,5 @@ public final class LazifyHud {
     private record Column(String legacyKey, String settingKey, String header, String compactHeader,
                           String scaleKey, String colorSetting) {}
     private record ColorStop(double minimum, int argb) {}
+    record PreviewBounds(int x, int y, int width, int height) {}
 }

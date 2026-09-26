@@ -31,6 +31,10 @@ The settings screen masks keys while editing. Settings are stored locally in the
 
 Choose Lazify, Nerdify, or Mellow from the settings screen. `/ov help` lists the HUD, player, and configuration commands.
 
+## Visuals
+
+The Lazify and Nerdify HUDs use the legacy panel spacing, headers, column alignment, outlines, and row highlighting. Mellow replaces the tab list with a centered compact table, player heads, and scroll indicators. Settings, overlay positioning, hidden-player management, and appearance presets use the matching dark panel and control styling.
+
 ## Legacy config import
 
 On first launch, Forge settings from `config/lazify/lazify.cfg` or `config/lazify.cfg` are imported into `config/lazify.json`. The old file is kept unchanged. Provider keys are migrated locally, and legacy LWJGL keybinds are converted to GLFW key codes. Existing appearance presets in `config/lazify/presets/*.properties` remain readable. If `config/lazify.json` already exists, it takes precedence; back it up and remove it before launch to import the old config.
