@@ -28,6 +28,7 @@ final class LazifyPositionScreen extends Screen {
     @Override
     public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
         super.extractRenderState(graphics, mouseX, mouseY, partialTick);
+        LazifyClient.renderPositionPreview(graphics);
         LazifyScreenStyle.drawTextCentered(graphics, font, "Drag the overlay to reposition it",
                 width / 2, 10, 0xFFFFFFFF, false);
         String position = "Current position: " + x + ", " + y + "  Scale: "

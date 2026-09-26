@@ -180,13 +180,22 @@ public final class LazifyHud {
         if (!shouldReplaceVanillaPlayerList()) mellowScroll = 0;
     }
     void render(net.minecraft.client.gui.GuiGraphicsExtractor graphics, net.minecraft.client.DeltaTracker delta) {
+        render(graphics, false);
+    }
+
+    void renderPositionPreview(net.minecraft.client.gui.GuiGraphicsExtractor graphics) {
+        render(graphics, true);
+    }
+
+    private void render(net.minecraft.client.gui.GuiGraphicsExtractor graphics, boolean foregroundPreview) {
         Minecraft client = Minecraft.getInstance();
         int theme = config.getInt("overlayTheme");
         boolean mellow = theme == 2;
         boolean nerdify = theme == 1;
         boolean positionPreview = client.gui.screen() instanceof LazifyPositionScreen;
         if (positionPreview) previewBounds = null;
-        if (!config.overlayEnabled() || (!positionPreview && !monitor.inBedwars())
+        if (positionPreview && !foregroundPreview) return;
+        if ((!positionPreview && !config.overlayEnabled()) || (!positionPreview && !monitor.inBedwars())
                 || (!positionPreview && client.player == null) || (positionPreview && mellow)) {
             resetScrollWhenInactive();
             return;

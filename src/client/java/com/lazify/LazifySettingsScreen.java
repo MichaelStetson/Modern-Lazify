@@ -21,6 +21,8 @@ final class LazifySettingsScreen extends Screen {
     private static final String[] API_KEYS = {"hypixelApiKey", "bordicApiKey", "urchinApiKey", "seraphApiKey"};
     private static final String[] API_LABELS = {"Hypixel API key", "Bordic API key", "Urchin API key", "Seraph API key"};
     private static final String[] THEMES = {"Lazify", "Nerdify", "Mellow"};
+    private static final long AUTOSAVE_DELAY_NANOS = 300_000_000L;
+    private static final int RESIZE_GRIP_SIZE = 8;
 
     private final Screen parent;
     private final LazifyConfig config;
@@ -42,6 +44,23 @@ final class LazifySettingsScreen extends Screen {
     private int contentH;
     private List<LegacySettingCatalog.Option> visibleOptions = List.of();
     private List<String> visibleColumnOrder = List.of();
+    private final List<TextFieldLayout> textFieldLayouts = new ArrayList<>();
+    private int initializedVisibleRows;
+    private boolean autosavePending;
+    private long autosaveDeadline;
+    private boolean resizing;
+    private int resizeStartMouseX;
+    private int resizeStartMouseY;
+    private int resizeStartWidth;
+    private int resizeStartHeight;
+    private int resizeStartX;
+    private int resizeStartY;
+    private boolean draggingWindow;
+    private boolean windowDragMoved;
+    private int windowDragStartMouseX;
+    private int windowDragStartMouseY;
+    private int windowDragStartX;
+    private int windowDragStartY;
 
     LazifySettingsScreen(Screen parent, LazifyConfig config) {
         super(Component.literal("Lazify Settings"));
@@ -57,16 +76,16 @@ final class LazifySettingsScreen extends Screen {
     @Override
     protected void init() {
         clearWidgets();
-        panelW = LazifyScreenStyle.windowWidth(width);
-        panelH = LazifyScreenStyle.windowHeight(height);
-        panelX = (width - panelW) / 2;
-        panelY = (height - panelH) / 2;
-        contentX = panelX + 70;
-        contentY = panelY + 28;
-        contentW = panelW - 70;
-        contentH = Math.max(1, panelY + panelH - 34 - contentY);
+        textFieldLayouts.clear();
+        panelW = LazifyScreenStyle.windowWidth(width, config.getInt("clickGuiWidth"));
+        panelH = LazifyScreenStyle.windowHeight(height, config.getInt("clickGuiHeight"));
+        panelX = LazifyScreenStyle.windowPositionX(width, panelW, config.getInt("clickGuiX"));
+        panelY = LazifyScreenStyle.windowPositionY(height, panelH, config.getInt("clickGuiY"));
+        updateContentGeometry();
 
         int visibleRows = Math.max(1, contentH / 30);
+        initializedVisibleRows = visibleRows;
+
         if (section.equals("API")) {
             visibleOptions = List.of();
             visibleColumnOrder = List.of();
@@ -89,10 +108,21 @@ final class LazifySettingsScreen extends Screen {
             }
         }
     }
+    private void updateContentGeometry() {
+        contentX = panelX + 70;
+        contentY = panelY + 28;
+        contentW = panelW - 70;
+        contentH = Math.max(1, panelY + panelH - 34 - contentY);
+    }
+
+    private int minimumVisibleRows() {
+        return Math.max(1, contentH / 30);
+    }
 
     private List<LegacySettingCatalog.Option> optionsForSection(String selectedSection) {
         return options.stream().filter(option -> {
             String category = option.section();
+            if (category.equals("Interface")) return false;
             if (option.key().equals("statsDisplayMode")) return false;
             if (option.key().equals("overlayTheme")) return selectedSection.equals("Customize");
             return switch (selectedSection) {
@@ -124,8 +154,9 @@ final class LazifySettingsScreen extends Screen {
         field.setMaxLength(512);
         Object value = pending.get(option.key());
         field.setValue(value == null ? "" : value.toString());
-        field.setResponder(text -> pending.put(option.key(), text));
+        field.setResponder(text -> setPending(option.key(), text));
         addRenderableWidget(field);
+        textFieldLayouts.add(new TextFieldLayout(field, row, false));
     }
 
 
@@ -143,10 +174,23 @@ final class LazifySettingsScreen extends Screen {
             field.setValue(apiValues[i] == null ? "" : apiValues[i]);
             field.addFormatter((value, firstCharacterIndex) -> FormattedCharSequence.forward(
                     "•".repeat(value.length()), net.minecraft.network.chat.Style.EMPTY));
-            field.setResponder(text -> apiValues[index] = text);
+            field.setResponder(text -> setApiValue(index, text));
             addRenderableWidget(field);
+            textFieldLayouts.add(new TextFieldLayout(field, i, true));
         }
         notice = "API key contents are masked while editing.";
+    }
+    private void updateTextFieldLayouts() {
+        for (TextFieldLayout layout : textFieldLayouts) {
+            int labelWidth = layout.api() ? Math.min(140, Math.max(100, contentW / 3))
+                    : Math.min(160, Math.max(90, contentW / 3));
+            int x = contentX + 12 + labelWidth + 10;
+            int y = contentY + layout.row() * (layout.api() ? 34 : 30);
+            int fieldWidth = Math.max(80, panelX + panelW - 12 - x);
+            layout.field().setX(x);
+            layout.field().setY(y);
+            layout.field().setWidth(fieldWidth);
+        }
     }
 
     private Object read(LegacySettingCatalog.Option option) {
@@ -184,7 +228,8 @@ final class LazifySettingsScreen extends Screen {
         if (to < 0 || to >= order.size()) return;
         String item = order.remove(from);
         order.add(to, item);
-        pending.put("colOrder", String.join(",", order));
+        setPending("colOrder", String.join(",", order));
+        flushAutosave();
         init();
     }
 
@@ -195,6 +240,31 @@ final class LazifySettingsScreen extends Screen {
         scroll = Math.max(0, Math.min(Math.max(0, count - visible), scroll + delta));
         init();
     }
+    private void setPending(String key, Object value) {
+        LegacySettingCatalog.Option option = LegacySettingCatalog.option(key);
+        if (option == null) return;
+        pending.put(key, value);
+        switch (option.type()) {
+            case BOOLEAN -> config.setBoolean(key, (Boolean) value);
+            case INTEGER -> config.setInt(key, ((Number) value).intValue());
+            case DECIMAL -> config.setDouble(key, ((Number) value).doubleValue());
+            case TEXT -> config.setString(key, value.toString());
+        }
+        scheduleAutosave();
+    }
+
+    private void setApiValue(int index, String value) {
+        apiValues[index] = value;
+        config.setString(API_KEYS[index], value);
+        scheduleAutosave();
+    }
+
+    private void scheduleAutosave() {
+        autosavePending = true;
+        autosaveDeadline = System.nanoTime() + AUTOSAVE_DELAY_NANOS;
+        notice = "Saving...";
+    }
+
     private void save() {
         for (LegacySettingCatalog.Option option : options) {
             if (option.key().toLowerCase(Locale.ROOT).contains("apikey")) continue;
@@ -209,6 +279,14 @@ final class LazifySettingsScreen extends Screen {
         }
         for (int i = 0; i < API_KEYS.length; i++) config.setString(API_KEYS[i], apiValues[i] == null ? "" : apiValues[i]);
         config.save();
+        autosavePending = false;
+        notice = "Settings saved to " + config.file().getFileName();
+    }
+
+    private void flushAutosave() {
+        if (!autosavePending) return;
+        config.save();
+        autosavePending = false;
         notice = "Settings saved to " + config.file().getFileName();
     }
 
@@ -216,7 +294,13 @@ final class LazifySettingsScreen extends Screen {
         pending.clear();
         for (LegacySettingCatalog.Option option : options) pending.put(option.key(), read(option));
         for (int i = 0; i < API_KEYS.length; i++) apiValues[i] = config.getString(API_KEYS[i]);
+        autosavePending = false;
         init();
+    }
+    @Override
+    public void tick() {
+        super.tick();
+        if (autosavePending && System.nanoTime() - autosaveDeadline >= 0) flushAutosave();
     }
 
     @Override
@@ -227,6 +311,7 @@ final class LazifySettingsScreen extends Screen {
         drawSidebar(graphics, mouseX, mouseY);
         drawContent(graphics, mouseX, mouseY);
         drawFooter(graphics, mouseX, mouseY);
+        drawResizeGrip(graphics, mouseX, mouseY);
     }
 
     private int footerY() {
@@ -429,7 +514,7 @@ final class LazifySettingsScreen extends Screen {
     private void drawFooter(GuiGraphicsExtractor graphics, int mouseX, int mouseY) {
         int y = footerY();
         if (section.equals("Features")) {
-            LazifyScreenStyle.drawButton(graphics, font, panelX + 8, y, 82, 18,
+            LazifyScreenStyle.drawButton(graphics, font, contentX + 8, y, 82, 18,
                     "Hidden players", mouseX, mouseY, true);
         } else if (!notice.isEmpty()) {
             graphics.text(font, ellipsize(notice, Math.max(30, presetsButtonX() - contentX - 16)),
@@ -443,6 +528,16 @@ final class LazifySettingsScreen extends Screen {
                 "Save & Apply", mouseX, mouseY, true);
         LazifyScreenStyle.drawButton(graphics, font, doneButtonX(), y, 40, 18,
                 "Done", mouseX, mouseY, true);
+    }
+    private void drawResizeGrip(GuiGraphicsExtractor graphics, int mouseX, int mouseY) {
+        int x = panelX + panelW - RESIZE_GRIP_SIZE;
+        int y = panelY + panelH - RESIZE_GRIP_SIZE;
+        int color = LazifyScreenStyle.contains(mouseX, mouseY, x, y,
+                RESIZE_GRIP_SIZE, RESIZE_GRIP_SIZE) ? LazifyScreenStyle.ACCENT : LazifyScreenStyle.DIVIDER;
+        for (int offset = 0; offset < 5; offset++) {
+            graphics.fill(x + RESIZE_GRIP_SIZE - 1 - offset, y + RESIZE_GRIP_SIZE - 1 - offset,
+                    x + RESIZE_GRIP_SIZE - offset, y + RESIZE_GRIP_SIZE - offset, color);
+        }
     }
 
     private String ellipsize(String value, int maxWidth) {
@@ -458,9 +553,10 @@ final class LazifySettingsScreen extends Screen {
         double ratio = Math.max(0.0, Math.min(1.0, (mouseX - sliderX) / 80.0));
         double value = option.min() + ratio * (option.max() - option.min());
         if (option.type() == LegacySettingCatalog.ValueType.INTEGER) {
-            pending.put(option.key(), (int) Math.round(value));
+            setPending(option.key(), (int) Math.round(value));
         } else {
-            pending.put(option.key(), Math.max(option.min(), Math.min(option.max(), Math.round(value * 100.0) / 100.0)));
+            setPending(option.key(), Math.max(option.min(), Math.min(option.max(),
+                    Math.round(value * 100.0) / 100.0)));
         }
     }
 
@@ -469,9 +565,26 @@ final class LazifySettingsScreen extends Screen {
         if (event.button() != 0) return super.mouseClicked(event, doubleClick);
         double mouseX = event.x();
         double mouseY = event.y();
-        if (LazifyScreenStyle.contains(mouseX, mouseY, moveButtonX(), panelY + 4, 88, 16)) {
-            save();
-            Minecraft.getInstance().setScreenAndShow(new LazifyPositionScreen(this, config));
+        if (LazifyScreenStyle.contains(mouseX, mouseY, panelX, panelY, panelW, 24)) {
+            draggingWindow = true;
+            windowDragMoved = false;
+            windowDragStartMouseX = (int) Math.round(mouseX);
+            windowDragStartMouseY = (int) Math.round(mouseY);
+            windowDragStartX = panelX;
+            windowDragStartY = panelY;
+            return true;
+        }
+        int gripX = panelX + panelW - RESIZE_GRIP_SIZE;
+        int gripY = panelY + panelH - RESIZE_GRIP_SIZE;
+        if (LazifyScreenStyle.contains(mouseX, mouseY, gripX, gripY,
+                RESIZE_GRIP_SIZE, RESIZE_GRIP_SIZE)) {
+            resizing = true;
+            resizeStartMouseX = (int) Math.round(mouseX);
+            resizeStartMouseY = (int) Math.round(mouseY);
+            resizeStartWidth = panelW;
+            resizeStartHeight = panelH;
+            resizeStartX = panelX;
+            resizeStartY = panelY;
             return true;
         }
         for (int i = 0; i < SECTIONS.length; i++) {
@@ -498,7 +611,7 @@ final class LazifySettingsScreen extends Screen {
             return true;
         }
         if (section.equals("Features")
-                && LazifyScreenStyle.contains(mouseX, mouseY, panelX + 8, footerY, 82, 18)) {
+                && LazifyScreenStyle.contains(mouseX, mouseY, contentX + 8, footerY, 82, 18)) {
             BedwarsMonitor monitor = LazifyClient.monitor();
             if (monitor != null) Minecraft.getInstance().setScreenAndShow(new LazifyHiddenPlayersScreen(this, monitor));
             return true;
@@ -523,7 +636,8 @@ final class LazifySettingsScreen extends Screen {
                     if (row >= 0 && row < visibleOptions.size()) {
                         LegacySettingCatalog.Option option = visibleOptions.get(row);
                         if (mouseX >= columnOrderX() - 30) {
-                            pending.put(option.key(), !Boolean.TRUE.equals(pending.get(option.key())));
+                            setPending(option.key(), !Boolean.TRUE.equals(pending.get(option.key())));
+                            flushAutosave();
                             return true;
                         }
                     }
@@ -531,6 +645,7 @@ final class LazifySettingsScreen extends Screen {
             } else if (!section.equals("API")) {
                 int row = (int) ((mouseY - contentY) / 30) + scroll;
                 if (row >= 0 && row < visibleOptions.size() && clickOption(visibleOptions.get(row), mouseX)) {
+                    flushAutosave();
                     return true;
                 }
             }
@@ -542,7 +657,7 @@ final class LazifySettingsScreen extends Screen {
         int right = panelX + panelW - 12;
         String key = option.key();
         if (option.type() == LegacySettingCatalog.ValueType.BOOLEAN && mouseX >= right - 28) {
-            pending.put(key, !Boolean.TRUE.equals(pending.get(key)));
+            setPending(key, !Boolean.TRUE.equals(pending.get(key)));
             return true;
         }
         if (key.equals("keybind") && mouseX >= right - 156) {
@@ -552,7 +667,7 @@ final class LazifySettingsScreen extends Screen {
         }
         if (key.equals("overlayTheme") && mouseX >= right - 142) {
             int current = ((Number) pending.get(key)).intValue();
-            pending.put(key, (Math.floorMod(current, THEMES.length) + 1) % THEMES.length);
+            setPending(key, (Math.floorMod(current, THEMES.length) + 1) % THEMES.length);
             return true;
         }
         if (option.type() == LegacySettingCatalog.ValueType.INTEGER
@@ -565,8 +680,59 @@ final class LazifySettingsScreen extends Screen {
         return false;
     }
 
+    private void resizeWindow(double mouseX, double mouseY) {
+        int maximumWidth = Math.max(180, width - resizeStartX - 20);
+        int maximumHeight = Math.max(140, height - resizeStartY - 20);
+        int minimumWidth = Math.min(300, maximumWidth);
+        int minimumHeight = Math.min(220, maximumHeight);
+        int newWidth = Math.max(minimumWidth, Math.min(maximumWidth,
+                resizeStartWidth + (int) Math.round(mouseX - resizeStartMouseX)));
+        int newHeight = Math.max(minimumHeight, Math.min(maximumHeight,
+                resizeStartHeight + (int) Math.round(mouseY - resizeStartMouseY)));
+        if (newWidth == panelW && newHeight == panelH) return;
+
+        panelW = newWidth;
+        panelH = newHeight;
+        panelX = resizeStartX;
+        panelY = resizeStartY;
+        updateContentGeometry();
+        setPending("clickGuiWidth", panelW);
+        setPending("clickGuiHeight", panelH);
+        if (minimumVisibleRows() != initializedVisibleRows) {
+            int left = panelX;
+            int top = panelY;
+            init();
+            panelX = left;
+            panelY = top;
+            updateContentGeometry();
+        }
+        updateTextFieldLayouts();
+    }
+
+    private void moveWindow(double mouseX, double mouseY) {
+        int deltaX = (int) Math.round(mouseX - windowDragStartMouseX);
+        int deltaY = (int) Math.round(mouseY - windowDragStartMouseY);
+        if (deltaX == 0 && deltaY == 0) return;
+        windowDragMoved = true;
+        int maximumX = Math.max(0, width - panelW);
+        int maximumY = Math.max(0, height - panelH);
+        panelX = Math.max(0, Math.min(maximumX, windowDragStartX + deltaX));
+        panelY = Math.max(0, Math.min(maximumY, windowDragStartY + deltaY));
+        updateContentGeometry();
+        setPending("clickGuiX", panelX);
+        setPending("clickGuiY", panelY);
+        updateTextFieldLayouts();
+    }
     @Override
     public boolean mouseDragged(MouseButtonEvent event, double dragX, double dragY) {
+        if (draggingWindow && event.button() == 0) {
+            moveWindow(event.x(), event.y());
+            return true;
+        }
+        if (resizing && event.button() == 0) {
+            resizeWindow(event.x(), event.y());
+            return true;
+        }
         if (draggingSetting != null && event.button() == 0) {
             LegacySettingCatalog.Option option = LegacySettingCatalog.option(draggingSetting);
             if (option != null) setSlider(option, event.x());
@@ -577,8 +743,25 @@ final class LazifySettingsScreen extends Screen {
 
     @Override
     public boolean mouseReleased(MouseButtonEvent event) {
+        if (event.button() == 0 && draggingWindow) {
+            draggingWindow = false;
+            if (!windowDragMoved && LazifyScreenStyle.contains(event.x(), event.y(),
+                    moveButtonX(), panelY + 4, 88, 16)) {
+                save();
+                Minecraft.getInstance().setScreenAndShow(new LazifyPositionScreen(this, config));
+            } else {
+                flushAutosave();
+            }
+            return true;
+        }
+        if (event.button() == 0 && resizing) {
+            resizing = false;
+            flushAutosave();
+            return true;
+        }
         if (event.button() == 0 && draggingSetting != null) {
             draggingSetting = null;
+            flushAutosave();
             return true;
         }
         return super.mouseReleased(event);
@@ -599,14 +782,17 @@ final class LazifySettingsScreen extends Screen {
             return true;
         }
         if (event.key() == GLFW.GLFW_KEY_UNKNOWN) return true;
-        pending.put("keybind", event.key());
+        setPending("keybind", event.key());
         capturingOverlayKey = false;
         LazifyClient.rebindOverlayKey(event.key());
+        autosavePending = false;
+        notice = "Settings saved to " + config.file().getFileName();
         init();
         return true;
     }
     @Override
     public void onClose() {
+        if (autosavePending) save();
         Minecraft.getInstance().setScreenAndShow(parent);
     }
 
@@ -615,4 +801,5 @@ final class LazifySettingsScreen extends Screen {
         return false;
     }
 
+    private record TextFieldLayout(EditBox field, int row, boolean api) { }
 }

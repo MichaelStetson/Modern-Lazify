@@ -31,6 +31,8 @@ The settings screen masks keys while editing. Settings are stored locally in the
 
 Choose Lazify, Nerdify, or Mellow from the settings screen. `/ov help` lists the HUD, player, and configuration commands.
 
+Settings edits apply immediately and autosave automatically; **Save & Apply** flushes pending typing or drag edits at once. Drag the top bar to move the settings window, or its lower-right corner to resize it; both position and dimensions persist in the local config. The Move Overlay screen previews the HUD sharply, even when the overlay itself is disabled.
+
 ## Visuals
 
 The Lazify and Nerdify HUDs use the legacy panel spacing, headers, column alignment, outlines, and row highlighting. Mellow replaces the tab list with a centered compact table, player heads, and scroll indicators. Settings, overlay positioning, hidden-player management, and appearance presets use the matching dark panel and control styling.

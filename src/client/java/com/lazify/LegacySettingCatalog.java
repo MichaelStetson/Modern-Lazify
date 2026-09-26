@@ -6,7 +6,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/** Metadata and safe defaults for settings carried forward from the legacy client. */
+/** Metadata and safe defaults for user settings. */
 final class LegacySettingCatalog {
     enum ValueType { BOOLEAN, INTEGER, DECIMAL, TEXT }
 
@@ -22,6 +22,10 @@ final class LegacySettingCatalog {
         Map<String, Object> defaults = new LinkedHashMap<>();
         add(options, defaults, "overlayEnabled", "Overlay enabled", "Overlay", ValueType.BOOLEAN, true, 0, 1, "Show the stats overlay.");
         add(options, defaults, "maxRows", "Maximum rows", "Overlay", ValueType.INTEGER, 16, 1, 32, "Maximum number of players shown.");
+        integer(options, defaults, "clickGuiWidth", 420, 300, 4096, "Interface", "Settings window width in pixels.");
+        integer(options, defaults, "clickGuiHeight", 320, 220, 4096, "Interface", "Settings window height in pixels.");
+        integer(options, defaults, "clickGuiX", -1, -1, 4096, "Interface", "Settings window horizontal position.");
+        integer(options, defaults, "clickGuiY", -1, -1, 4096, "Interface", "Settings window vertical position.");
         integer(options, defaults, "keybind", 96, 0, 348, "General", "Overlay toggle key (GLFW key code; use Controls or this screen to rebind).");
         bool(options, defaults, "keybindHold", false, "General", "Only show the overlay while holding its keybind.");
         bool(options, defaults, "showOnTab", true, "General", "Show the overlay while holding Tab.");

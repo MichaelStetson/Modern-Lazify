@@ -15,12 +15,26 @@ final class LazifyScreenStyle {
 
     private LazifyScreenStyle() { }
 
-    static int windowWidth(int screenWidth) {
-        return Math.max(180, Math.min(420, screenWidth - 40));
+    static int windowWidth(int screenWidth, int preferredWidth) {
+        int maximum = Math.max(180, screenWidth - 40);
+        int minimum = Math.min(300, maximum);
+        return Math.max(minimum, Math.min(maximum, preferredWidth));
     }
 
-    static int windowHeight(int screenHeight) {
-        return Math.max(140, Math.min(320, screenHeight - 30));
+    static int windowHeight(int screenHeight, int preferredHeight) {
+        int maximum = Math.max(140, screenHeight - 30);
+        int minimum = Math.min(220, maximum);
+        return Math.max(minimum, Math.min(maximum, preferredHeight));
+    }
+
+    static int windowPositionX(int screenWidth, int windowWidth, int preferredX) {
+        int maximum = Math.max(0, screenWidth - windowWidth);
+        return preferredX < 0 ? maximum / 2 : Math.max(0, Math.min(maximum, preferredX));
+    }
+
+    static int windowPositionY(int screenHeight, int windowHeight, int preferredY) {
+        int maximum = Math.max(0, screenHeight - windowHeight);
+        return preferredY < 0 ? maximum / 2 : Math.max(0, Math.min(maximum, preferredY));
     }
 
     static void drawWindow(GuiGraphicsExtractor graphics, Font font, int x, int y, int width, int height,

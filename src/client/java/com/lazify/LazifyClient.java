@@ -12,6 +12,7 @@ import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
 import net.fabricmc.fabric.api.client.rendering.v1.hud.VanillaHudElements;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.effect.MobEffects;
 import net.minecraft.resources.Identifier;
@@ -24,6 +25,7 @@ public final class LazifyClient implements ClientModInitializer {
     private static final Logger LOGGER = LoggerFactory.getLogger("lazify");
     private static final Identifier CATEGORY_ID = Identifier.fromNamespaceAndPath("lazify", "main");
     private static LazifyClient instance;
+    private static LazifyHud lazifyHud;
 
     private final LazifyConfig config = new LazifyConfig();
     private final PlayerStatsService statsService = new PlayerStatsService();
@@ -77,16 +79,16 @@ public final class LazifyClient implements ClientModInitializer {
             }
         });
 
-        LazifyHud hud = new LazifyHud(config, monitor);
+        lazifyHud = new LazifyHud(config, monitor);
         HudElementRegistry.attachElementBefore(VanillaHudElements.PLAYER_LIST,
                 Identifier.fromNamespaceAndPath("lazify", "player_stats_under_tab"),
                 (graphics, delta) -> {
-                    if (!config.getBoolean("overlayOverTab")) hud.render(graphics, delta);
+                    if (!config.getBoolean("overlayOverTab")) lazifyHud.render(graphics, delta);
                 });
         HudElementRegistry.attachElementAfter(VanillaHudElements.PLAYER_LIST,
                 Identifier.fromNamespaceAndPath("lazify", "player_stats_over_tab"),
                 (graphics, delta) -> {
-                    if (config.getBoolean("overlayOverTab")) hud.render(graphics, delta);
+                    if (config.getBoolean("overlayOverTab")) lazifyHud.render(graphics, delta);
                 });
         ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) ->
                 LazifyCommands.register(dispatcher, config, monitor, statsService, this::openSettings));
@@ -96,6 +98,10 @@ public final class LazifyClient implements ClientModInitializer {
     private void openSettings() {
         Minecraft client = Minecraft.getInstance();
         client.setScreenAndShow(new LazifySettingsScreen(client.gui.screen(), config));
+    }
+
+    static void renderPositionPreview(GuiGraphicsExtractor graphics) {
+        if (lazifyHud != null) lazifyHud.renderPositionPreview(graphics);
     }
 
     static BedwarsMonitor monitor() {
