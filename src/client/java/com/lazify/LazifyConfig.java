@@ -16,6 +16,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Objects;
 
 
 final class LazifyConfig {
@@ -23,12 +24,18 @@ final class LazifyConfig {
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
     private static final Path FILE = FabricLoader.getInstance().getConfigDir().resolve("lazify.json");
     private final Map<String, Object> settings = new LinkedHashMap<>(LegacySettingCatalog.defaults());
+    private volatile long revision;
 
     synchronized void load() {
         reload();
     }
 
+    long revision() {
+        return revision;
+    }
+
     synchronized void reload() {
+        revision++;
         settings.clear();
         settings.putAll(LegacySettingCatalog.defaults());
         if (!Files.exists(FILE)) {
@@ -173,7 +180,9 @@ final class LazifyConfig {
         if (option.type() != expected) {
             throw new IllegalArgumentException("Setting " + key + " is " + option.type() + ", not " + expected);
         }
-        settings.put(key, normalize(option, value));
+        Object normalized = normalize(option, value);
+        Object previous = settings.put(key, normalized);
+        if (!Objects.equals(previous, normalized)) revision++;
     }
 
     private static LegacySettingCatalog.Option option(String key) {

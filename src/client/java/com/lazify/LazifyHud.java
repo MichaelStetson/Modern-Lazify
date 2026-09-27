@@ -64,6 +64,25 @@ public final class LazifyHud {
 
     private final LazifyConfig config;
     private final BedwarsMonitor monitor;
+    private long columnCacheRevision = Long.MIN_VALUE;
+    private List<Column> cachedColumns = List.of();
+    private List<Column> cachedMellowColumns = List.of();
+    private long renderCacheRevision = Long.MIN_VALUE;
+    private List<Column> renderCacheColumns;
+    private List<BedwarsMonitor.PlayerRow> renderCachePlayers;
+    private boolean renderCacheMellow;
+    private int[] cachedWidths = new int[0];
+    private int[] cachedHeaderWidths = new int[0];
+    private String[] cachedHeaders = new String[0];
+    private String[][] cachedDisplayValues = new String[0][0];
+    private int[][] cachedValueWidths = new int[0][0];
+    private int[][] cachedValueColors = new int[0][0];
+    private int[] cachedRowHighlights = new int[0];
+    private final Map<String, List<ColorStop>> cachedScales = new HashMap<>();
+    private final Map<String, Integer> cachedHeaderColors = new HashMap<>();
+    private Object cachedMellowConnection;
+    private List<BedwarsMonitor.PlayerRow> cachedMellowRows = List.of();
+    private long lastMellowRowsRefresh;
 
     LazifyHud(LazifyConfig config, BedwarsMonitor monitor) {
         this.config = config;
@@ -102,7 +121,24 @@ public final class LazifyHud {
     }
 
     private List<BedwarsMonitor.PlayerRow> mellowRows(Minecraft client) {
-        if (client.getConnection() == null) return List.of();
+        Object connection = client.getConnection();
+        if (connection == null) {
+            cachedMellowConnection = null;
+            cachedMellowRows = List.of();
+            lastMellowRowsRefresh = 0;
+            return cachedMellowRows;
+        }
+        long now = System.nanoTime();
+        if (connection != cachedMellowConnection || lastMellowRowsRefresh == 0
+                || now - lastMellowRowsRefresh >= 100_000_000L) {
+            cachedMellowConnection = connection;
+            cachedMellowRows = buildMellowRows(client);
+            lastMellowRowsRefresh = now;
+        }
+        return cachedMellowRows;
+    }
+
+    private List<BedwarsMonitor.PlayerRow> buildMellowRows(Minecraft client) {
         Map<UUID, BedwarsMonitor.PlayerRow> tracked = new HashMap<>();
         for (BedwarsMonitor.PlayerRow row : monitor.players()) tracked.put(row.uuid(), row);
 
@@ -206,12 +242,13 @@ public final class LazifyHud {
             return;
         }
 
-        List<Column> columns = visibleColumns();
-        if (mellow) columns = nameFirst(columns);
+        long revision = config.revision();
+        List<Column> columns = visibleColumns(mellow, revision);
         if (columns.isEmpty()) return;
 
         List<BedwarsMonitor.PlayerRow> players = mellow ? mellowRows(client) : monitor.players();
         if (mellow && players.isEmpty()) return;
+        prepareRenderCache(client, columns, players, mellow, revision);
         int screenWidth = graphics.guiWidth();
         int screenHeight = graphics.guiHeight();
         int rowGap = Math.max(0, config.getInt("overlayRowGap"));
@@ -219,7 +256,7 @@ public final class LazifyHud {
         int top = mellow ? 20 : config.getInt("overlayY");
         int gap = mellow ? 4 : Math.max(0, config.getInt("overlayColGap"));
         int inset = mellow ? 0 : overlayInset(nerdify);
-        int[] widths = columnWidths(client, columns, players, mellow);
+        int[] widths = cachedWidths;
         int contentWidth = totalWidth(widths, gap);
         int panelWidth = mellow ? contentWidth : contentWidth + inset * 2;
         int fontHeight = client.font.lineHeight;
@@ -274,7 +311,6 @@ public final class LazifyHud {
                 config.getInt("mellowRowB"), config.getInt("mellowRowA"));
         int taggedBg = color(config.getInt("mellowTaggedR"), config.getInt("mellowTaggedG"),
                 config.getInt("mellowTaggedB"), config.getInt("mellowTaggedA"));
-        Map<String, List<ColorStop>> scales = new HashMap<>();
         graphics.pose().pushMatrix();
         graphics.pose().translate(x, y);
         graphics.pose().scale(scale, scale);
@@ -298,23 +334,18 @@ public final class LazifyHud {
         int cellPad = nerdify ? Math.max(3, gap / 2) : 0;
         for (int i = 0; i < columns.size(); i++) {
             Column column = columns.get(i);
-            String header = mellow || !nerdify ? column.header : column.compactHeader;
-            if (mellow && header.startsWith("[") && header.endsWith("]") && header.length() > 2) {
-                header = header.substring(1, header.length() - 1);
-            }
-            if (mellow) header = header.toUpperCase(Locale.ROOT);
-            if (config.getBoolean("headerBold") && !header.isEmpty()) header = "§l" + header;
+            String header = cachedHeaders[i];
             int headerX;
             if (mellow) {
                 headerX = column.legacyKey.equals("username") ? cursorX + 13
                         : column.legacyKey.equals("rank") ? cursorX + 3
-                        : cursorX + widths[i] - 3 - client.font.width(header);
+                        : cursorX + widths[i] - 3 - cachedHeaderWidths[i];
             } else if (nerdify && nerdifyNumericColumn(column.legacyKey)) {
-                headerX = cursorX + (widths[i] - client.font.width(header)) / 2;
+                headerX = cursorX + (widths[i] - cachedHeaderWidths[i]) / 2;
             } else if (nerdify) {
                 headerX = cursorX + cellPad;
             } else {
-                headerX = cursorX + (widths[i] - client.font.width(header)) / 2;
+                headerX = cursorX + (widths[i] - cachedHeaderWidths[i]) / 2;
             }
             graphics.text(client.font, header, headerX, headerY, headerColor(column), config.getBoolean("textShadow"));
             cursorX += widths[i] + gap;
@@ -325,10 +356,11 @@ public final class LazifyHud {
             graphics.fill(inset, separatorY, panelWidth - inset, separatorY + 1, outlineColor());
         }
         for (int rowIndex = 0; rowIndex < rowCount; rowIndex++) {
-            BedwarsMonitor.PlayerRow row = players.get(firstRow + rowIndex);
+            int cacheRow = firstRow + rowIndex;
+            BedwarsMonitor.PlayerRow row = players.get(cacheRow);
             int rowY = contentY + rowIndex * rowHeight;
             int rowBottom = rowY + rowHeight;
-            int highlight = rowHighlight(row);
+            int highlight = cachedRowHighlights[cacheRow];
             if (highlight != 0) {
                 graphics.fill(mellow ? 0 : 1, rowY, mellow ? panelWidth : panelWidth - 1, rowBottom, highlight);
             } else if (mellow) {
@@ -343,17 +375,8 @@ public final class LazifyHud {
             for (int i = 0; i < columns.size(); i++) {
                 Column column = columns.get(i);
                 int headSpace = mellow && column.legacyKey.equals("username") ? 10 : 0;
-                String text = displayValue(column, row);
-                if (mellow) {
-                    text = fitMellow(client, text, widths[i] - 6 - headSpace);
-                } else if (column.legacyKey.equals("username")) {
-                    text = trimToWidth(client, text, widths[i]);
-                }
-                int textColor = valueColor(column, text, row, scales);
-                if (mellow && column.legacyKey.equals("username")
-                        && unresolvedNick(row) && row.team().isBlank()) {
-                    textColor = 0xFFFFFF55;
-                }
+                String text = cachedDisplayValues[cacheRow][i];
+                int textColor = cachedValueColors[cacheRow][i];
                 int textX;
                 if (mellow) {
                     textX = cursorX + 3;
@@ -362,14 +385,14 @@ public final class LazifyHud {
                         textX += headSpace;
                     }
                     if (!column.legacyKey.equals("username") && !column.legacyKey.equals("rank")) {
-                        textX = cursorX + widths[i] - 3 - client.font.width(text);
+                        textX = cursorX + widths[i] - 3 - cachedValueWidths[cacheRow][i];
                     }
                 } else if (nerdify) {
                     textX = nerdifyNumericColumn(column.legacyKey)
-                            ? cursorX + (widths[i] - client.font.width(text)) / 2 : cursorX + cellPad;
+                            ? cursorX + (widths[i] - cachedValueWidths[cacheRow][i]) / 2 : cursorX + cellPad;
                 } else {
                     textX = column.legacyKey.equals("username") || column.legacyKey.equals("rank")
-                            ? cursorX : cursorX + (widths[i] - client.font.width(text)) / 2;
+                            ? cursorX : cursorX + (widths[i] - cachedValueWidths[cacheRow][i]) / 2;
                 }
                 int textY = mellow ? rowY + Math.max(0, (rowHeight - fontHeight) / 2) : rowY;
                 graphics.text(client.font, text, textX, textY, textColor, config.getBoolean("textShadow"));
@@ -388,37 +411,61 @@ public final class LazifyHud {
     }
 
 
-    private List<Column> visibleColumns() {
-        Map<String, Column> byKey = new HashMap<>();
-        for (Column column : COLUMNS) byKey.put(column.legacyKey, column);
-        List<Column> ordered = new ArrayList<>(COLUMNS.length);
-        for (String key : config.getString("colOrder").split(",")) {
-            Column column = byKey.get(key.trim().toLowerCase(Locale.ROOT));
-            if (column != null && !ordered.contains(column)) ordered.add(column);
+    private List<Column> visibleColumns(boolean mellow, long revision) {
+        if (columnCacheRevision != revision) {
+            Map<String, Column> byKey = new HashMap<>();
+            for (Column column : COLUMNS) byKey.put(column.legacyKey, column);
+            List<Column> ordered = new ArrayList<>(COLUMNS.length);
+            for (String key : config.getString("colOrder").split(",")) {
+                Column column = byKey.get(key.trim().toLowerCase(Locale.ROOT));
+                if (column != null && !ordered.contains(column)) ordered.add(column);
+            }
+            for (Column column : COLUMNS) {
+                if (!ordered.contains(column)) ordered.add(column);
+            }
+            List<Column> visible = new ArrayList<>(ordered.size());
+            for (Column column : ordered) {
+                if (config.getBoolean(column.settingKey)) visible.add(column);
+            }
+            cachedColumns = List.copyOf(visible);
+            cachedMellowColumns = List.copyOf(nameFirst(cachedColumns));
+            cachedScales.clear();
+            cachedHeaderColors.clear();
+            columnCacheRevision = revision;
         }
-        for (Column column : COLUMNS) {
-            if (!ordered.contains(column)) ordered.add(column);
-        }
-        return ordered.stream().filter(column -> config.getBoolean(column.settingKey)).toList();
+        return mellow ? cachedMellowColumns : cachedColumns;
     }
 
-    private int[] columnWidths(Minecraft client, List<Column> columns,
-                               List<BedwarsMonitor.PlayerRow> players, boolean mellow) {
+    private void prepareRenderCache(Minecraft client, List<Column> columns,
+                                   List<BedwarsMonitor.PlayerRow> players, boolean mellow, long revision) {
+        if (renderCacheRevision == revision && renderCacheColumns == columns
+                && renderCachePlayers == players && renderCacheMellow == mellow) return;
+
         boolean nerdify = !mellow && config.getInt("overlayTheme") == 1;
+        boolean headerBold = config.getBoolean("headerBold");
         int[] widths = new int[columns.size()];
-        for (int i = 0; i < columns.size(); i++) {
-            Column column = columns.get(i);
+        int[] headerWidths = new int[columns.size()];
+        String[] headers = new String[columns.size()];
+        String[][] values = new String[players.size()][columns.size()];
+        int[][] valueWidths = new int[players.size()][columns.size()];
+        int[][] valueColors = new int[players.size()][columns.size()];
+        int[] rowHighlights = new int[players.size()];
+
+        for (int columnIndex = 0; columnIndex < columns.size(); columnIndex++) {
+            Column column = columns.get(columnIndex);
             String header = mellow || !nerdify ? column.header : column.compactHeader;
             if (mellow && header.startsWith("[") && header.endsWith("]") && header.length() > 2) {
                 header = header.substring(1, header.length() - 1).toUpperCase(Locale.ROOT);
             }
-            if (config.getBoolean("headerBold") && !header.isEmpty()) {
-                header = "§l" + header + (mellow ? "§r" : "");
-            }
+            if (headerBold && !header.isEmpty()) header = "§l" + header;
+            headers[columnIndex] = header;
+            headerWidths[columnIndex] = client.font.width(header);
+
             int headSpace = mellow && column.legacyKey.equals("username") ? 10 : 0;
             int width = client.font.width(stripFormatting(header)) + (mellow && !header.isEmpty() ? 6 : 0);
-            for (BedwarsMonitor.PlayerRow row : players) {
-                String value = displayValue(column, row);
+            for (int rowIndex = 0; rowIndex < players.size(); rowIndex++) {
+                String value = displayValue(column, players.get(rowIndex));
+                values[rowIndex][columnIndex] = value;
                 int valueWidth = client.font.width(stripFormatting(value));
                 if (mellow) valueWidth += 6 + headSpace;
                 width = Math.max(width, valueWidth);
@@ -426,9 +473,43 @@ public final class LazifyHud {
             int minimum = mellow ? mellowMinColumnWidth(column.legacyKey)
                     : nerdify ? nerdifyMinColumnWidth(column.legacyKey) : 0;
             width = Math.max(width, minimum);
-            widths[i] = mellow ? Math.min(width, mellowMaxColumnWidth(column.legacyKey)) : width;
+            widths[columnIndex] = mellow ? Math.min(width, mellowMaxColumnWidth(column.legacyKey)) : width;
         }
-        return widths;
+
+        for (int rowIndex = 0; rowIndex < players.size(); rowIndex++) {
+            BedwarsMonitor.PlayerRow row = players.get(rowIndex);
+            rowHighlights[rowIndex] = rowHighlight(row);
+            for (int columnIndex = 0; columnIndex < columns.size(); columnIndex++) {
+                Column column = columns.get(columnIndex);
+                String value = values[rowIndex][columnIndex];
+                if (mellow) {
+                    int headSpace = column.legacyKey.equals("username") ? 10 : 0;
+                    value = fitMellow(client, value, widths[columnIndex] - 6 - headSpace);
+                } else if (column.legacyKey.equals("username")) {
+                    value = trimToWidth(client, value, widths[columnIndex]);
+                }
+                values[rowIndex][columnIndex] = value;
+                valueWidths[rowIndex][columnIndex] = client.font.width(value);
+                if (column.legacyKey.equals("username")) {
+                    valueColors[rowIndex][columnIndex] = mellow && unresolvedNick(row) && row.team().isBlank()
+                            ? 0xFFFFFF55 : usernameColor(row);
+                } else {
+                    valueColors[rowIndex][columnIndex] = valueColor(column, value);
+                }
+            }
+        }
+
+        cachedWidths = widths;
+        cachedHeaderWidths = headerWidths;
+        cachedHeaders = headers;
+        cachedDisplayValues = values;
+        cachedValueWidths = valueWidths;
+        cachedValueColors = valueColors;
+        cachedRowHighlights = rowHighlights;
+        renderCacheColumns = columns;
+        renderCachePlayers = players;
+        renderCacheMellow = mellow;
+        renderCacheRevision = revision;
     }
 
     private String displayValue(Column column, BedwarsMonitor.PlayerRow row) {
@@ -481,25 +562,27 @@ public final class LazifyHud {
         return value;
     }
 
-    private int valueColor(Column column, String text, BedwarsMonitor.PlayerRow row, Map<String, List<ColorStop>> scales) {
-        if (column.legacyKey.equals("username")) {
-            if (row.self() && config.getBoolean("highlightSelf")) return configuredColor("highlightSelf");
-            if (containsIgnoreCase(monitor.partyMembers(), row.name()) && config.getBoolean("highlightParty")) return configuredColor("highlightParty");
-            if (unresolvedNick(row) && config.getBoolean("highlightNicked")) return configuredColor("highlightNicked");
-            if (!row.tag().isBlank() && config.getBoolean("highlightTagged")) return configuredColor("highlightTagged");
-            if (config.getBoolean("teams")) return teamColor(row.team());
-            if (row.self()) return 0xFFFFD76A;
-        }
+    private int valueColor(Column column, String text) {
         if (column.scaleKey == null || column.colorSetting == null || !config.getBoolean(column.colorSetting)) return TEXT;
         Double value = metricValue(column.legacyKey, text);
         if (value == null) return TEXT;
-        List<ColorStop> stops = scales.computeIfAbsent(column.scaleKey, key -> parseScale(config.getString(key)));
+        List<ColorStop> stops = cachedScales.computeIfAbsent(column.scaleKey, key -> parseScale(config.getString(key)));
         ColorStop selected = stops.isEmpty() ? null : stops.getFirst();
         for (ColorStop stop : stops) {
             if (value < stop.minimum) break;
             selected = stop;
         }
         return selected == null ? TEXT : selected.argb;
+    }
+
+    private int usernameColor(BedwarsMonitor.PlayerRow row) {
+        if (row.self() && config.getBoolean("highlightSelf")) return configuredColor("highlightSelf");
+        if (containsIgnoreCase(monitor.partyMembers(), row.name()) && config.getBoolean("highlightParty")) return configuredColor("highlightParty");
+        if (unresolvedNick(row) && config.getBoolean("highlightNicked")) return configuredColor("highlightNicked");
+        if (!row.tag().isBlank() && config.getBoolean("highlightTagged")) return configuredColor("highlightTagged");
+        if (config.getBoolean("teams")) return teamColor(row.team());
+        if (row.self()) return 0xFFFFD76A;
+        return TEXT;
     }
 
     private static boolean unresolvedNick(BedwarsMonitor.PlayerRow row) {
@@ -520,6 +603,10 @@ public final class LazifyHud {
     }
 
     private int headerColor(Column column) {
+        return cachedHeaderColors.computeIfAbsent(column.legacyKey, ignored -> parseHeaderColor(column));
+    }
+
+    private int parseHeaderColor(Column column) {
         for (String part : config.getString("headerColors").split(";")) {
             String[] pieces = part.split(":", 2);
             if (pieces.length != 2 || !pieces[0].equalsIgnoreCase(column.legacyKey)) continue;

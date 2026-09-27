@@ -35,7 +35,7 @@ Settings edits apply immediately and autosave automatically; **Save & Apply** fl
 
 ## Visuals
 
-The Lazify and Nerdify HUDs use the legacy panel spacing, headers, column alignment, outlines, and row highlighting. Mellow replaces the tab list with a centered compact table, player heads, and scroll indicators. Settings, overlay positioning, hidden-player management, and appearance presets use the matching dark panel and control styling.
+The Lazify and Nerdify HUDs use the legacy panel spacing, headers, column alignment, outlines, and row highlighting. Mellow replaces the tab list with a centered compact table, player heads, and scroll indicators. Settings, overlay positioning, hidden-player management, and appearance presets use the matching dark panel and control styling. To reduce render overhead, formatted HUD values and measurements are reused until tracker or config data changes; Mellow's player rows refresh every 100 ms.
 
 ## Legacy config import
 
