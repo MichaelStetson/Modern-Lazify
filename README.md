@@ -5,7 +5,7 @@ Client-side Fabric port of Lazify’s BedWars stats HUD and gameplay utilities f
 ## Requirements
 
 - Minecraft 26.2
-- Fabric Loader 0.19.5 or newer and Fabric API
+- Fabric Loader 0.19.3 or newer and Fabric API
 - Java 25
 
 ## Build and run
